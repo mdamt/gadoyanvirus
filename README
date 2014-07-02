@@ -1,5 +1,5 @@
 gadoyanvirus - a virus stopper for qmail.
-version 0.2 "Kepala Pusing" - 20040128 GPL
+version 0.3 "I'm a researcher not a champion" - 20040430 GPL
 Mohammad DAMT <mdamt@bisnisweb.com>
 (c) 2004, PT Cakram Datalingga Duaribu (http://www.cdl2000.com)
 
@@ -22,79 +22,16 @@ The web site is http://oss.mdamt.net/gadoyanvirus/
 No bugzilla, just report your bugs (or success) to 
 gadoyanvirus@mdamt.net
 
-This software is known to work in Linux Mandrake 9.2. If you
+This software is known to work in Linux Mandrake 10 Community. If you
 have gadoyanvirus works in another systems, please let me know.
 
 WHAT IS ClamAV
 Clam AntiVirus (ClamAV) is an open source anti virus toolkit for UNIX.
-You can find more information about ClamAV in it's web page (url is in the end of
+You can find more information about ClamAV in it's web page (a url is available at the end of
 this document). 
 
 HOW TO USE
-* Install ClamAV. I use version 0.65. You have to manage your virus database
-  according to ClamAV documentation.
-
-* Modify gadoyanvirus.c to suit your needs. You can change these options:
-
-  qmail-queue program 
-  #define QMAIL_QUEUE "/var/qmail/bin/qmail-queue"
-  If you use qmail with QMAILQUEUE patch, you must leave it untouched.
-  Otherwise, change it to the original qmail-queue program
-
-  quarantine directory:
-  #define QUARANTINE_DIR "/opt/gadoyanvirus/quarantine"
-  You must create this directory manually. Suspected message will
-  be saved in a maildir named after current date in this directory.
-  You should perform an automatic clean up in this directory, delete
-  all mails which are 1 week old.
-
-  virusmaster email:
-  if you want to send notification messages, make it to:
-  #define VIRUSMASTER "postmaster@"
-  otherwise make it to this:
-  #undef VIRUSMASTER 
-  This is the email address which will send the notification letter
-  to the recipient(s). If they reply this mail and demand for the mail, 
-  you should give the suspected mail to them (if you want to)
-
-* Compile gadoyanvirus:
-  # gcc -o gadoyanvirus gadoyanvirus.c -lclamav -I /path/to/clamav/include 
-
-  If your ClamAV installation is not in your library path, you can try:
-
-  # gcc -o gadoyanvirus gadoyanvirus.c -lclamav -I /path/to/clamav/include\
-    -L /path/to/clamav/lib
-
-* Install it somewhere in your PATH
-
-  # cp gadoyanvirus /usr/bin
-
-* Create quarantine directory 
-
-  # mkdir /opt/gadoyanvirus/quarantine
-  # chown qmaild.nofiles /opt/gadoyanvirus/quarantine
-
-* Put it in your tcp.smtp, like:
-  :allow,TMPDIR="/tmp",QMAILQUEUE="/usr/bin/gadoyanvirus"
-
-  or if your ClamAV installation is not in your library path, you can try:
-  :allow,TMPDIR="/tmp",LD_LIBRARY_PATH="/path/to/clamav/lib",QMAILQUEUE="/usr/bin/gadoyanvirus"
-
-  if you already have tcp.smtp file, add TMPDIR and QMAILQUEUE variable on each entry you 
-  want gadoyanvirus to be activated. Then rebuild the rule database with:
-
-  # tcprules /etc/tcp.smtp.cdb /etc/tcp.smtp.tmp < /etc/tcp.smtp
-
-* invoke your smtp server using tcp.smtp rules above. If you don't know
-  how to do this, refer to your qmail documentation.
-
-* If a virus is catched you can spot it on the mail log like this:
-  Jan 24 23:25:24 gordon gadoyanvirus[13988]: new/gordon.oo.cdl2000.co.id.3221221896.13988
-  Jan 24 23:25:24 gordon gadoyanvirus[13988]: Exploit.IFrame.Gen
-  Jan 24 23:25:24 gordon gadoyanvirus[13988]: virus catched
-
-  First line is the file name in quarantine directory, second is the virus name, third is a
-  mark to make it easy to spot.
+Please read the INSTALL file
 
 [1] http://www.clamav.net/
 [2] http://www.bisnisweb.net/

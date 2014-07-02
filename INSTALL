@@ -1,0 +1,124 @@
+INSTALLATION NOTES
+* Install ClamAV[1]. I use version 0.70. You have to manage your virus database
+  according to ClamAV documentation.
+
+* Run configure, available options are:
+
+  --gadoyanvirus
+	Directory which you want to install gadoyanvirus. Quarantine directory
+	will be located under this directory
+	Default: /opt/gadoyanvirus
+
+  --with-clamav
+    Installation directory of ClamAV.
+	Default: /usr
+
+  --with-smtp-user
+    Username who runs the smtp server. Change to vpopmail if you use vpopmail
+	Default: qmaild
+
+  --with-qmail-queue
+    qmail-queue program.
+	Default: /var/qmail/bin/qmail-queue
+
+  --with-virusmaster
+    The email address used to send notification address. Notification
+	will be disabled if you don't supply this flag. You must recompile
+	if you want to activate/deactivate it later.
+	Default: none
+
+  Example: You want to use vpopmail as the smtp user, ClamAV is located at 
+           /opt/clamav and gadoyanvirus will be installed in /opt/gadoyanvirus
+
+		   The configuration command is:
+
+           ./configure --prefix=/opt/gadoyanvirus --with-clamav=/opt/clamav\
+		   --with-smtp-user=vpopmail
+   
+* Compile gadoyanvirus. As easy as:
+
+  # make && make install
+
+  Your gadoyanvirus binary will be installed as gadoyanvirus located in
+  gadoyanvirus installation dir (see --with-gadoyanvirus flag above)
+
+  The installation also will create the quarantine directory
+
+* Put it in your tcp.smtp, something like this:
+  :allow,TMPDIR="/tmp",QMAILQUEUE="/opt/gadoyanvirus/bin/gadoyanvirus"
+
+  or if your ClamAV installation is not in your library path, you can try:
+  :allow,TMPDIR="/tmp",LD_LIBRARY_PATH="/path/to/clamav/lib",QMAILQUEUE="/opt/gadoyanvirus/bin/gadoyanvirus"
+
+  put RELAYCLIENT="" if you want to make your smtp server to relay messages.
+  if you already have tcp.smtp file, add TMPDIR and QMAILQUEUE variable on each entry you 
+  want gadoyanvirus to be activated. Then rebuild the rule database with:
+
+  # tcprules /etc/tcp.smtp.cdb /etc/tcp.smtp.tmp < /etc/tcp.smtp
+
+* vpopmail users only: You might want to increase the memory allocation defined by vpopmail
+  Do it if the smtp server can't invoke gadoyanvirus.
+
+HOW TO USE
+* run gadoyanvirus as root 
+
+  # gadoyanvirus
+
+  or if your ClamAV installation is not in your library path, try:
+
+  # LD_LIBRARY_PATH=/path/to/clamav/lib TMPDIR=/tmp gadoyanvirus
+
+  Do it once, just once.
+
+  A moment later, gadoyanvirus will change to user id qmaild (or to other user
+  which is running your smtp server) and stays in the background.
+
+  To force gadoyanvirus to reload the ClamAV virus database, try:
+
+  # killall -HUP gadoyanvirus
+
+  (note that if there's no new database, gadoyanvirus will not reload it)
+
+  or if you hate gadoyanvirus so much, you can kill gadoyanvirus by doing:
+  
+  # killall -9 gadoyanvirus
+
+  Please note that all incoming mails will be defered in SMTP level if 
+  the gadoyanvirus' daemon is not running. That means no mail will go to the qmail queue.
+  You might want to invoke gadoyanvirus everytime your computer boots.
+
+  You may see messages like these below when trying to run gadoyanvirus:
+
+  Couldn't bind socket file /opt/gadoyanvirus/.socket: Address already in use, trying to steal
+  socket file /opt/gadoyanvirus/.socket successfully stolen
+
+  Well, that's a normal behaviour. 
+  
+  The gadoyanvirus' daemon idea was intentionally designed
+  to make gadoyanvirus lighter. All scanning process are done by this daemon.
+  In the previous version, all scanning process were done by individual 
+  gadoyanvirus process invoked by the smtp server. This caused gadoyanvirus to
+  load ClamAV database all the time. But why don't you just use Clamd?
+  You may ask. The answer is: I just want to do it that way (tm). 
+
+  Every 5 minutes gadoyanvirus will see if there's a new virus database available
+  and will try to reload it. A successful reload will be logged like this:
+
+  Apr 30 23:48:31 gordon gadoyanvirus[10526]: Re-loading virus database
+
+* invoke your smtp server using tcp.smtp rules above. If you don't know
+  how to do this, refer to your qmail documentation.
+
+* If a virus is catched you can spot it on the mail log like this:
+  Apr 29 23:54:13 gordon gadoyanvirus[3191]: virus: 1083257653.3191.gordon.oo.cdl2000.co.id Worm.SomeFool.Gen-1
+
+  First column is quarantined virus file and the second is the virus' name.
+
+* gadoyanvirus will add a mail header on every mail it scan. The header is
+  
+  X-AntiVirus: gadoyanvirus VERSION
+
+  with VERSION is the current version of gadoyanvirus
+
+
+[1] http://www.clamav.net/

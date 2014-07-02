@@ -1,7 +1,16 @@
+2004-04-30  Mohammad DAMT  <mdamt@bisnisweb.com>
+
+	* version 0.3 (I'm a researcher not a champion)
+	* now uses autotools, configuration done by the configure script.
+	* moved the scanning process to a daemon. should be more faster and lighter.
+	* log now shows a simpler messages.
+	* there's a database watcher which runs on every 5 minutes. if a new database
+	  is detected, gadoyanvirus will reload the database.
+
 2004-01-29	Mohammad DAMT  <mdamt@bisnisweb.com>
 
 	* version 0.2 (Kepala Pusing)
-	* rearrange and clean internal code. Now it uses less memory to process
+	* rearranged and cleaned internal code. Now it uses less memory to process
 	  incoming messages
 
 2004-01-28	Mohammad DAMT  <mdamt@bisnisweb.com>

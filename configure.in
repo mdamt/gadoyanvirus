@@ -1,0 +1,106 @@
+dnl Mohammad DAMT [mdamt at bisnisweb dot com] 
+dnl (c) 2004, PT Cakram Datalingga Duaribu
+dnl    
+dnl This program is free software; you can redistribute it and/or
+dnl modify it under the terms of the GNU General Public License
+dnl as published by the Free Software Foundation; either version 2
+dnl of the License, or (at your option) any later version.
+dnl 
+dnl This program is distributed in the hope that it will be useful,
+dnl but WITHOUT ANY WARRANTY; without even the implied warranty of
+dnl MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+dnl GNU General Public License for more details.
+dnl 
+dnl You should have received a copy of the GNU General Public License
+dnl along with this program; if not, write to the Free Software
+dnl Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
+
+AC_INIT(gadoyanvirus.c)
+
+VERSION="0.3"
+AC_DEFINE_UNQUOTED(VERSION, "${VERSION}", [])
+
+PACKAGE=gadoyanvirus
+
+AM_INIT_AUTOMAKE($PACKAGE, $VERSION)
+AC_PROG_CC
+AC_HEADER_STDC
+
+AC_CHECK_HEADER(pthread.h,[],[AC_MSG_ERROR([I need pthread!])])
+
+AC_ARG_WITH(virusmaster, [  --with-virusmaster=email@domain	The virus master email address],
+[
+	VIRUSMASTER="$withval"
+	AC_DEFINE_UNQUOTED(VIRUSMASTER,"${VIRUSMASTER}",[])
+])
+
+GADOYANVIRUS_DIR=/opt/gadoyanvirus
+AC_MSG_CHECKING(for --with-gadoyanvirus)
+AC_ARG_WITH(gadoyanvirus, [  --with-gadoyanvirus=PATH		path to gadoyanvirus install directory],
+[
+	GADOYANVIRUS_DIR="$withval"
+])
+
+AC_DEFINE_UNQUOTED(GADOYANVIRUS_DIR, "${GADOYANVIRUS_DIR}",[])
+AC_SUBST(GADOYANVIRUS_DIR)
+
+CLAMAV_DIR=/usr
+AC_MSG_CHECKING(for --with-clamav)
+AC_ARG_WITH(clamav, [  --with-clamav=PATH		path to ClamAV install directory],
+[
+	CLAMAV_DIR="$withval"
+])
+
+if test -e "$CLAMAV_DIR/include/clamav.h"
+then
+	AC_MSG_RESULT([$CLAMAV_DIR])
+	CLAMAV_LIB="-L$CLAMAV_DIR/lib -lclamav"
+	CLAMAV_INCLUDE="-I$CLAMAV_DIR/include"
+	AC_SUBST(CLAMAV_LIB)
+	AC_SUBST(CLAMAV_INCLUDE)
+else
+	AC_MSG_ERROR([$CLAMAV_DIR/include/clamav.h was not found])
+fi
+
+QMAIL_QUEUE=/var/qmail/bin/qmail-queue
+AC_MSG_CHECKING(for --with-qmail-queue)
+AC_ARG_WITH(qmail-queue, [  --with-qmail-queue=PATH	path to qmail-queue program],
+[
+	QMAIL_QUEUE="$withval"
+])
+
+if test -x "$QMAIL_QUEUE"
+then
+	AC_MSG_RESULT([$QMAIL_QUEUE])
+	AC_DEFINE_UNQUOTED(QMAIL_QUEUE, "${QMAIL_QUEUE}", [])
+else
+	AC_MSG_ERROR([$withval is not a valid program])
+fi
+
+SMTP_USER=qmaild
+AC_MSG_CHECKING(for --with-smtp-user)
+AC_ARG_WITH(smtp-user, [  --with-smtp-user=username	username which runs the smtp server, eg. qmaild or vpopmail],
+[ 
+	SMTP_USER="$withval"	
+])
+
+AC_MSG_RESULT([$SMTP_USER])
+test_user=`grep ^${SMTP_USER}: /etc/passwd`
+if test -z "$test_user"
+then
+	AC_MSG_ERROR([${SMTP_USER} is not a valid user])
+fi
+
+SMTP_UID=`id -u ${SMTP_USER}`
+SMTP_GID=`id -g ${SMTP_USER}`
+AC_SUBST(SMTP_UID)
+AC_SUBST(SMTP_GID)
+
+AC_DEFINE_UNQUOTED(SMTP_USER, "${SMTP_USER}", [])
+
+gadoyanvirus_cflags="-Wall"
+gadoyanvirus_ldflags="-lpthread"
+AC_SUBST(gadoyanvirus_cflags)
+AC_SUBST(gadoyanvirus_ldflags)
+
+AC_OUTPUT(Makefile)

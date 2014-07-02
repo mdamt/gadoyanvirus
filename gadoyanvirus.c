@@ -23,6 +23,9 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 #include <stdio.h>
 #include <stdlib.h>
 #include <signal.h>
+#include <sys/socket.h>
+#include <sys/un.h>
+#include <errno.h>
 #include <time.h>
 #include <string.h>
 #include <sys/stat.h>
@@ -30,28 +33,48 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 #include <fcntl.h>
 #include <sys/wait.h>
 #include <syslog.h>
-
+#include <pwd.h>
+#include <pthread.h>
 #include <clamav.h>
 
-/*
- * You may modify these settings
- */
+#ifndef QMAIL_QUEUE
 #define QMAIL_QUEUE "/var/qmail/bin/qmail-queue"
-#define QUARANTINE_DIR "/opt/gadoyanvirus/quarantine"
-#define VIRUSMASTER "postmaster@"
-/* end of settings */
+#endif
 
-#define VERSION "0.2"
+#ifndef GADOYANVIRUS_DIR
+#define GADOYANVIRUS_DIR "/opt/gadoyanvirus"
+#endif
+
+#define QUARANTINE_DIR GADOYANVIRUS_DIR "/quarantine"
+#define QUARANTINE_DIR_TMP QUARANTINE_DIR "/tmp"
+#define SOCKET_FILE GADOYANVIRUS_DIR "/.socket"
+
+#ifndef SMTP_USER
+#define SMTP_USER "qmaild"
+#endif
+
+#define SLEEP_TIME 300
 #define BUFFER_SIZE 1024
 
-void write_log (char *message)
+static int server_reloaded = 1;
+static struct cl_node *root = NULL;
+static struct cl_limits limit;
+pthread_mutex_t mt = PTHREAD_MUTEX_INITIALIZER;
+pthread_mutex_t mt_server_reloaded = PTHREAD_MUTEX_INITIALIZER;
+
+struct server_rec
+{	
+	int sock;
+};
+
+void write_log (const char *message)
 {
 	openlog ("gadoyanvirus", LOG_PID | LOG_NDELAY, LOG_MAIL); 
 	syslog (LOG_INFO,"%s", message); 
 	closelog (); 
 }
 
-void die_status (int code, char *message)
+void die_status (int code, const char *message)
 {
 	write_log (message); 
 	exit (code);
@@ -59,7 +82,10 @@ void die_status (int code, char *message)
 
 void die_temp_cl (int ret)
 {
-	die_status (81, cl_strerror (ret));
+	openlog ("gadoyanvirus", LOG_PID | LOG_NDELAY, LOG_MAIL); 
+	syslog (LOG_INFO,"clamav: %s", cl_strerror (ret)); 
+	closelog (); 
+	exit (81);
 }
 
 void save_maildir (char *tmp_path)
@@ -177,7 +203,7 @@ char *save_temp ()
 	return filename;
 }
 
-
+#ifdef VIRUSMASTER
 void send_notification (	char *virus_name, 
 							char *key,
 							int message_fd, 
@@ -189,19 +215,16 @@ void send_notification (	char *virus_name,
 	
 	char hostname [512];
 
-#ifdef VIRUSMASTER
 	int i = 0, quot_len, recipient_len, tmp, r_len;
 	char *notification, message_quot [2048];
 	char *notification_envelope, *recipient;
 	char buffer [BUFFER_SIZE];
 	int stop = 0;
-#endif
 
 	bzero (hostname, 512);
 	if (gethostname (hostname, 512) != 0)
 		strcpy (hostname, "localhost");
 
-#ifdef VIRUSMASTER
 	recipient_len = envelope_len;
 	recipient = envelope;
 	while (i < envelope_len) {
@@ -301,38 +324,359 @@ void send_notification (	char *virus_name,
 		die_status (81, "couldn't write notification envelope");
 	
 	free (notification_envelope);
+
+}
 #endif
 
-	write_log (key);
-	write_log (virus_name);
+int try_listen (const char *path)
+{
+	struct sockaddr_un address;
+	int i = 0, sock;
+
+	sock = socket (AF_UNIX, SOCK_STREAM, 0);
+	if (sock < 0) {
+		fprintf (stderr, "Couldn't create socket: %s\n", strerror (errno));
+		return -1;
+	}
+	 
+	bzero ((void *) &address, sizeof (address));
+	address.sun_family = AF_UNIX;
+	memcpy (address.sun_path, path, strlen (path));
+	while (i < 10) {
+		if (bind (sock, (struct sockaddr*) &address, sizeof (address)) < 0) {
+			fprintf (stderr, "Couldn't bind socket file %s: %s, trying to steal\n", path, strerror (errno));
+			unlink (path);
+			usleep (500);
+		} else break;
+		i ++;
+	}
+	
+	if (i > 9) {
+		fprintf (stderr, "Couldn't bind socket file %s: %s\n", path, strerror (errno));
+		return -1;
+	}
+
+	if (i > 0) {
+		fprintf (stderr, "socket file %s successfully stolen\n", path);
+	}
+ 
+	if (listen (sock, 10) != 0) {
+		fprintf (stderr, "Couldn't listen on %s: %s\n", path, strerror (errno));
+		return -1;
+	}
+
+	chmod (path, 0700);
+	return sock;
+}
+
+int try_accept (int sock)
+{
+	int retval;
+	struct sockaddr_un address;
+	socklen_t len = sizeof (struct sockaddr_un);
+
+	retval = accept (sock, (struct sockaddr*) &address, &len);
+	if (retval < 0) 
+		fprintf (stderr, "Couldn't accept: %s\n", strerror (errno));
+
+	return retval;
+}
+
+int try_connect (const char *path, int probe)
+{
+	int retval = -1, sock =-1;
+	struct sockaddr_un address;
+
+	bzero ((char*) &address, sizeof (address));
+	address.sun_family = AF_UNIX;
+	strcpy (address.sun_path, path);
+
+	if ((sock = socket (AF_UNIX, SOCK_STREAM, 0)) < 0) {
+		write_log ("Couldn't make socket.\n");
+		return -1;
+	}
+
+	if ((retval = connect (sock, (struct sockaddr*) &address, sizeof (struct sockaddr_un))) < 0) {
+		if (probe == 0)
+			write_log ("Couldn't make connection.\n");
+
+		return -1;
+	}
+
+	return sock;
+}
+
+void reload (int arg)
+{
+	pthread_mutex_lock (&mt_server_reloaded);
+	server_reloaded = 1;
+	pthread_mutex_unlock (&mt_server_reloaded);
+}
+
+void *reload_timer (void *arg)
+{
+	while (1) {
+		sleep (SLEEP_TIME); 
+		pthread_mutex_lock (&mt_server_reloaded);
+		server_reloaded = 1;
+		pthread_mutex_unlock (&mt_server_reloaded);		
+	}
+	return NULL;
+}
+
+void daemonize () 
+{
+	int i;
+
+	if (getppid () == 1)
+		return;
+
+	i = fork ();
+	if (i < 0) {
+		fprintf (stderr, "Error: %s\n", strerror (errno));
+		exit (1);
+	}
+
+	if (i > 0) {
+		exit (0);
+	}
+	
+	setsid();
+	for (i = 0; i < 3; i++)
+		close(i);
+
+	i = open("/dev/null",O_RDWR);
+	dup(i); dup(i);
+	umask (027);
+
+	signal (SIGCHLD, SIG_IGN);
+	signal (SIGTSTP, SIG_IGN);
+	signal (SIGTTOU, SIG_IGN);
+	signal (SIGTTIN, SIG_IGN);
+	signal (SIGHUP, reload);
+	signal (SIGUSR1, SIG_IGN);
+}
+
+int check_server (const char *path)
+{
+	struct stat st;
+	int sock;
+
+	if (stat (path, &st) == -1)
+		return 0;
+
+	if (S_ISSOCK (st.st_mode)) {
+		if ((sock = try_connect (path, 1)) == -1)
+			return 0;
+
+		close (sock);
+		
+		return -1;
+	} else {
+		unlink (path);
+	}
+	return 0;
+}
+
+void *scanner (void *arg)
+{
+	struct server_rec *rec = (struct server_rec *) arg;
+	int ret, length;
+	unsigned long int scanned;
+	
+	char *tmp_path = NULL;
+	const char *virus_name;
+
+	ret = read (rec->sock, &length, sizeof (int));
+	if (ret <= 0) {
+		write_log ("server: premature on read the path length");
+		goto scanner_exit;
+	}
+
+	if (length == 0) {
+		write_log ("server: path length is zero");
+		goto scanner_exit;
+	}
+
+	tmp_path = malloc (strlen (QUARANTINE_DIR_TMP) + length + 2);
+	if (tmp_path == NULL) {
+		write_log ("server: not enough memory");
+		goto scanner_exit;
+	}
+
+	bzero (tmp_path, strlen (QUARANTINE_DIR_TMP) + length + 2);
+	strcpy (tmp_path, QUARANTINE_DIR_TMP);
+	tmp_path [strlen (QUARANTINE_DIR_TMP)] = '/';
+	
+	ret = read (rec->sock, tmp_path + strlen (QUARANTINE_DIR_TMP) + 1, length);
+	if (ret <= 0) {
+		write_log ("server: premature on read the file path");
+		goto scanner_exit;
+	}
+	
+	pthread_mutex_lock (&mt);
+	ret = cl_scanfile (tmp_path, &virus_name, &scanned, root, &limit, CL_MAIL);
+	pthread_mutex_unlock (&mt);
+	
+	if (ret == CL_VIRUS) {
+		length = strlen (virus_name);
+		ret = write (rec->sock, &length, sizeof (int));
+
+		if (ret <= 0)
+			goto scanner_exit;
+
+		write (rec->sock, virus_name, length);
+	} else if (ret == CL_CLEAN) {
+		ret = 0;
+		write (rec->sock, &ret, sizeof (int));
+	} else {
+		write_log (cl_strerror (ret));
+		ret = -1;
+		write (rec->sock, &ret, sizeof (int));			
+	}
+
+scanner_exit:
+	if (tmp_path != NULL)
+		free (tmp_path);
+
+	close (rec->sock);
+	free (rec);
+	pthread_exit (NULL);
+	return NULL;
+}
+
+void init_scanner ()
+{
+	int ret, server_sock, client_sock, first_time = 1;
+	struct passwd *pwd = NULL;
+	struct cl_stat clamav_stat;
+	pthread_attr_t att;
+	pthread_t t0;
+	const char *db_dir;
+
+	limit.maxfiles = 1000;
+	limit.maxfilesize = 10 * 1048576;
+	limit.maxreclevel = 5;
+
+	db_dir = cl_retdbdir ();
+	bzero (&clamav_stat, sizeof (struct cl_stat));
+	cl_statinidir (db_dir, &clamav_stat);
+
+	pwd = getpwnam (SMTP_USER);
+	if (pwd == NULL) {
+		fprintf (stderr,	"ERROR: No such user %s.\n"
+							"- qmail may have not been installed.\n"
+							"- Recompile gadoyanvirus with proper username who run qmail-smtpd.\n", 
+							SMTP_USER);
+		exit (-1);
+	}
+
+	mkdir (GADOYANVIRUS_DIR, 0711);
+	chown (GADOYANVIRUS_DIR, pwd->pw_uid, pwd->pw_gid);
+
+	if (getuid () == 0) {
+		setgid (pwd->pw_gid);
+		if (setuid (pwd->pw_uid) == -1) {
+			fprintf (stderr, "Couldn't setuid to %s.\n", SMTP_USER);
+			exit (-1);
+		}
+	}
+
+	if (check_server (SOCKET_FILE) == -1) {
+		fprintf (stderr, "gadoyanvirus server is already running.\n");
+		exit (-1);
+	}
+
+	signal (SIGHUP, reload);
+	if ((server_sock = try_listen (SOCKET_FILE)) == -1) {
+		fprintf (stderr, "gadoyanvirus server is unable to run.\n");
+		exit (-1);
+	}
+
+	daemonize ();
+	pthread_attr_init (&att);
+	pthread_attr_setdetachstate (&att, PTHREAD_CREATE_DETACHED);
+	if (pthread_create (&t0, &att, reload_timer, NULL) == -1) {
+		die_status (81, "server: Unable to start timer");
+	}
+	while (1) {
+		struct server_rec *rec;
+		pthread_t t;
+		
+		if (server_reloaded) {
+			if (cl_statchkdir (&clamav_stat) == 1 || first_time) {
+				pthread_mutex_lock (&mt);
+				if (first_time == 0) {
+					write_log ("Re-loading virus database");				
+					if (root != NULL)
+						cl_freetrie (root);
+					root = NULL;
+				} else {
+					write_log ("Loading virus database ");
+				}
+				
+				if ((ret = cl_loaddbdir (db_dir, &root, NULL)) != 0)
+					die_temp_cl (ret);
+
+				if (root == NULL)
+					die_status (81, "virus database loading failed.");
+
+				if ((ret = cl_buildtrie (root)) != 0)
+					die_temp_cl (ret);
+
+				if (first_time == 0) {
+					cl_statfree (&clamav_stat);
+					cl_statinidir (db_dir, &clamav_stat);
+				}
+				pthread_mutex_unlock (&mt);
+				pthread_mutex_lock (&mt_server_reloaded);
+				server_reloaded = 0;
+				pthread_mutex_unlock (&mt_server_reloaded);
+			}			
+			first_time = 0;
+		}
+
+		client_sock = try_accept (server_sock);
+		if (client_sock == -1) {
+			write_log ("Error on accepting connections.\n");
+			write_log (strerror (errno));
+			break;
+		}
+
+		rec = malloc (sizeof (struct server_rec));
+		if (rec == NULL) {
+			write_log ("Error on allocating server rec.\n");
+			break;
+		}
+
+		rec->sock = client_sock;
+		if (pthread_create (&t, &att, scanner, (void*) rec) == -1) {
+			write_log ("Error on creating threads.\n");
+			break;
+		}		
+	}
 }
 
 int main () 
 {
-	char buffer [BUFFER_SIZE];
-	struct cl_node *root = NULL;
-	int ret;
-	int r_len = 0;
+	char buffer [BUFFER_SIZE];	
+	int r_len = 0, ret, sock;
 	int envelope_len = 0;
-	char *virus_name;
+	char *virus_name = NULL;
 	char *tmp_path;
 	char *envelope = NULL;
 	int message_pipe [2];
 	int envelope_pipe [2];
 	int child_status;
-	int tmp_fd;
-	unsigned long scanned;
-	struct cl_limits limit;
-	limit.maxfiles = 1000;
-	limit.maxfilesize = 10 * 1048576;
-	limit.maxreclevel = 5;
+	int tmp_fd, tmp_len;
 	pid_t pid;
 
-	if ((ret = cl_loaddbdir (cl_retdbdir (), &root, NULL)) != 0)
-		die_temp_cl (ret);
+	if (getuid () == 0) {
+		init_scanner ();
+		exit (0);
+	}
 
-	cl_buildtrie (root);
-
+	signal (SIGHUP, SIG_IGN);
 	if (pipe (envelope_pipe) == -1)
 		die_status (51, "couldn't open pipe for envelope");
 
@@ -350,6 +694,7 @@ int main ()
 			close (message_pipe [0]);
 			close (message_pipe [1]);
 			die_status (51, "fork() failed");
+			exit (-1);
 			break;
 		case 0:
 			close (envelope_pipe [1]);
@@ -367,8 +712,36 @@ int main ()
 
 	ret = 0;
 	tmp_path = save_temp ();
+	tmp_len = strlen (tmp_path);
 
-	ret = cl_scanfile (tmp_path, &virus_name, &scanned, root, &limit, CL_MAIL);
+	if ((sock = try_connect (SOCKET_FILE, 0)) == -1)
+		die_status (81, "couldn't connect to server");
+
+	r_len = write (sock, &tmp_len, sizeof (int));
+	if (r_len <= 0) 
+		die_status (54, "couldn't write to server");
+	
+	r_len = write (sock, tmp_path, tmp_len);
+	if (r_len <= 0) 
+		die_status (54, "couldn't write to server");
+
+	r_len = read (sock, &tmp_len, sizeof (int));
+	if (r_len <= 0)
+		die_status (54, "couldn't read from server");
+
+	if (tmp_len > 0) {
+		virus_name = malloc (tmp_len);
+		r_len = read (sock, virus_name, tmp_len);
+		if (r_len <= 0) {
+			free (virus_name);
+			die_status (54, "couldn't read from server");
+		}
+		ret = CL_VIRUS;
+	} else if (tmp_len < 0) {
+		die_status (81, "see the clamav error message above");
+	}
+
+	close (sock);
 
 	while ((r_len = read (1, buffer, BUFFER_SIZE)) != 0) {
 		if (r_len < 0)
@@ -403,17 +776,27 @@ int main ()
 		if (write (envelope_pipe [1], envelope, envelope_len) < 0)
 			die_status (53, "couldn't write envelope");
 	} else {
+		char *log = malloc (strlen (tmp_path) + strlen (virus_name) + 8);
+		bzero (log, strlen (tmp_path) + strlen (virus_name) + 8);
+		sprintf (log, "virus: %s %s", tmp_path, virus_name);
+		write_log (log);
+		free (log);
+#ifdef VIRUSMASTER
 		send_notification (	virus_name, 
 							tmp_path,
 							message_pipe [1], 
 							tmp_fd,
 							envelope_pipe [1], 
 							envelope, envelope_len);
+#endif
+
 		close (tmp_fd);
 		save_maildir (tmp_path);
 	}
 
-	cl_freetrie (root);
+	if (virus_name != NULL)
+		free (virus_name);
+
 	unlink (tmp_path);
 	free (tmp_path);
 	free (envelope);
@@ -427,10 +810,7 @@ int main ()
 		die_status (81, "qmail-queue crashed");
 
 	if (ret == CL_VIRUS)
-		die_status (31, "virus catched");
-
-	if (ret != CL_CLEAN)
-		die_temp_cl (ret);
+		exit (31);
 
 	return 0;
 }
