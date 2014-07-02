@@ -1,10 +1,16 @@
+2004-01-29	Mohammad DAMT  <mdamt@bisnisweb.com>
+
+	* version 0.2 (Kepala Pusing)
+	* rearrange and clean internal code. Now it uses less memory to process
+	  incoming messages
+
 2004-01-28	Mohammad DAMT  <mdamt@bisnisweb.com>
 
-	* version 0.15
+	* version 0.1.5 (Y!M via Gaim Mati Lagi)
 	* changed scan API call to ClamAV from cl_scanbuff to cl_scanfile in order
 	  to catch virus in mail message properly
 	* added "X-AntiVirus" signature in clean mail messages
 
 2004-01-26	Mohammad DAMT  <mdamt@bisnisweb.com>
 	
-	* version 0.1
+	* version 0.1 (Si Kolor Ijo)

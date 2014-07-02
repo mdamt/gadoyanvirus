@@ -41,7 +41,7 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 #define VIRUSMASTER "postmaster@"
 /* end of settings */
 
-#define VERSION "0.1.5"
+#define VERSION "0.2"
 #define BUFFER_SIZE 1024
 
 void write_log (char *message)
@@ -62,88 +62,13 @@ void die_temp_cl (int ret)
 	die_status (81, cl_strerror (ret));
 }
 
-char *save_maildir (char *path, char *message, long message_len)
+void save_maildir (char *tmp_path)
 {
 	time_t now = time (NULL);
 	char hostname [512];
-	pid_t pid = getpid ();
-	char *filename, *new;
-	int filename_len;
-	struct stat st;
-	int fd;
-	int ret;
-
-	bzero (hostname, 512);
-	if (gethostname (hostname, 512) != 0)
-		strcpy (hostname, "localhost");
-
-	if (chdir (path) != 0)
-		die_status (81, "couldnt chdir() to maildir path");
-
-	mkdir ("tmp", 0700);
-	mkdir ("new", 0700);
-	mkdir ("cur", 0700);
-
-	for (;;sleep (2)) {
-		filename_len =	4 + /* tmp/ */
-						strlen (hostname) +
-						20 + /* now */
-						10 + /* pid */
-						4; /* \0 */
-
-		filename = malloc (filename_len);
-		bzero (filename, filename_len);
-		snprintf (filename, filename_len, "tmp/%d.%d.%s", (unsigned int) now, (int) pid, hostname);
-
-		if (stat (filename, &st) == 0)
-			continue;
-
-		if ((fd = creat (filename, 0600)) == -1)
-			die_status (81, "couldn't create quarantine message");
-		
-		
-		if ((ret = write (fd, message, message_len)) < 0) {
-			die_status (81, "couldn't write quarantine message");
-		}
-
-		fsync (fd);
-		close (fd);
-		break;
-	}
-	
-	new = strdup (filename);
-	if (new == NULL)
-		die_status (81, "no memory for new/");
-
-	new [0] = 'n'; new [1] = 'e'; new [2] = 'w';
-
-	link (filename, new);
-
-	unlink (filename);
-	free (filename);
-	
-	return new;
-}
-
-void send_notification (	char *virus_name, 
-							int message_fd, 
-							char *message,
-							long message_len,
-							int envelope_fd, 
-							char *envelope,
-							int envelope_len)
-{
 	char subdir [9];
-	char *path, *key;
+	char *path, *new;
 	int path_len;
-	time_t now = time (NULL);
-	char hostname [512];
-
-#ifdef VIRUSMASTER
-	int i = 0, quot_len, recipient_len;
-	char *notification, message_quot [2048];
-	char *notification_envelope, *recipient;
-#endif
 
 	bzero (hostname, 512);
 	if (gethostname (hostname, 512) != 0)
@@ -154,14 +79,127 @@ void send_notification (	char *virus_name,
 	path_len = sizeof (QUARANTINE_DIR) + 1 + 9;
 	path = malloc (path_len);
 	if (path == NULL)
-		die_status (51, "out of memory when writing notification");
+		die_status (51, "out of memory when writing temp message");
 
 	sprintf (path, "%s/%s", QUARANTINE_DIR, subdir);
 	path [path_len] = 0;
 	mkdir (path, 0755);
 
-	key = save_maildir (path, message, message_len);
+	if (chdir (path) != 0)
+		die_status (81, "couldnt chdir() to quarantine path");
+
+	mkdir ("tmp", 0700);
+	mkdir ("new", 0700);
+	mkdir ("cur", 0700);
+
+	new = malloc (4+ strlen (tmp_path) + path_len);
+	if (new == NULL)
+		die_status (81, "no memory for new/");
+
+	sprintf (new, "%s/new/%s", path, tmp_path);
+
 	free (path);
+	path_len = sizeof (QUARANTINE_DIR) + 1 + 3 + strlen (tmp_path);
+	path = malloc (path_len);
+	if (path == NULL)
+		die_status (51, "out of memory when preparing temp message");
+
+	sprintf (path, "%s/tmp/%s", QUARANTINE_DIR, tmp_path);
+	path [path_len] = 0;
+
+	link (path, new);
+	unlink (path);
+
+	free (new);
+	free (path);
+}
+
+char *save_temp ()
+{
+	time_t now = time (NULL);
+	char hostname [512];
+	pid_t pid = getpid ();
+	char *filename;
+	int filename_len;
+	struct stat st;
+	int fd;
+	int ret;
+	char *path;
+	int path_len, r_len;
+	char buffer [BUFFER_SIZE];
+
+	bzero (hostname, 512);
+	if (gethostname (hostname, 512) != 0)
+		strcpy (hostname, "localhost");
+
+	path_len = sizeof (QUARANTINE_DIR) + 1 + 3;
+	path = malloc (path_len);
+	if (path == NULL)
+		die_status (51, "out of memory when preparing temp message");
+
+	sprintf (path, "%s/tmp", QUARANTINE_DIR);
+	path [path_len] = 0;
+	mkdir (path, 0755);
+
+	if (chdir (path) != 0)
+		die_status (81, "couldnt chdir() to quarantine path " QUARANTINE_DIR "/tmp");
+
+	for (;;sleep (2)) {
+		filename_len =	strlen (hostname) +
+						20 + /* now */
+						10 + /* pid */
+						4; /* \0 */
+
+		filename = malloc (filename_len);
+		bzero (filename, filename_len);
+		snprintf (filename, filename_len, "%d.%d.%s", (unsigned int) now, (int) pid, hostname);
+
+		if (stat (filename, &st) == 0)
+			continue;
+
+		if ((fd = creat (filename, 0600)) == -1)
+			die_status (81, "couldn't create temp message");
+				
+		while ((r_len = read (0, buffer, BUFFER_SIZE)) != 0) {		
+			if (r_len < 0)
+				die_status (54, "couldn't read message");
+
+			if ((ret = write (fd, buffer, r_len)) < 0) {
+				die_status (81, "couldn't write temp message");
+			}
+		}
+
+		fsync (fd);
+		close (fd);
+		break;
+	}
+	
+	return filename;
+}
+
+
+void send_notification (	char *virus_name, 
+							char *key,
+							int message_fd, 
+							int tmp_fd,
+							int envelope_fd, 
+							char *envelope,
+							int envelope_len)
+{
+	
+	char hostname [512];
+
+#ifdef VIRUSMASTER
+	int i = 0, quot_len, recipient_len, tmp, r_len;
+	char *notification, message_quot [2048];
+	char *notification_envelope, *recipient;
+	char buffer [BUFFER_SIZE];
+	int stop = 0;
+#endif
+
+	bzero (hostname, 512);
+	if (gethostname (hostname, 512) != 0)
+		strcpy (hostname, "localhost");
 
 #ifdef VIRUSMASTER
 	recipient_len = envelope_len;
@@ -175,24 +213,39 @@ void send_notification (	char *virus_name,
 	recipient += i;
 	
 	quot_len = 0;
-	bzero (message_quot, 2048);
+	bzero (message_quot, 2047);
 	i = 0;
-	while (quot_len < 2047) {
-		if (quot_len > message_len)
-			break;
 
-		if (message [quot_len] == 10 || message [quot_len] == 13)
+	tmp = 0;
+	while ((r_len = read (tmp_fd, buffer, BUFFER_SIZE)) != 0) {
+		if (r_len < 0)
+			die_status (54, "couldn't read message");
+
+		while (i < BUFFER_SIZE) {
+			if (buffer [i] == '\n')
+				tmp ++;
+			else 
+				tmp = 0;
+
+			if (tmp > 1) {
+				stop = 1;
+				break;
+			}
+
+			message_quot [quot_len] = buffer [i];
 			i ++;
-		else
-			if (i > 0) i --;
-
-		if (i > 2)
+			quot_len ++;
+			if (quot_len > 2047) {
+				stop = 1;
+				break;
+			}
+		}
+		i = 0;
+		if (stop == 1)
 			break;
-
-		message_quot [quot_len] = message [quot_len];
-		quot_len ++;
 	}
-	message_quot [quot_len - 1] = 0;
+
+	message_quot [quot_len] = 0;
 
 /* man this is very ugly */
 #define MSG0 "From: "
@@ -203,7 +256,7 @@ void send_notification (	char *virus_name,
 #define MSG4 "\n\nThis mail will be kept for 1 week only and after that it will be deleted automatically.\
 \n\nThis is the part of the mail:\n\
 --------------------------------------------------------------\n"
-#define MSG5 "\r\n"
+#define MSG5 "\n\r\n"
 
 	i = sizeof (MSG0) + sizeof (MSG1) + sizeof (MSG2) + sizeof (MSG3) + 
 		sizeof (MSG4) + sizeof (MSG5) + 
@@ -252,37 +305,28 @@ void send_notification (	char *virus_name,
 
 	write_log (key);
 	write_log (virus_name);
-	free (key);
 }
 
 int main () 
 {
+	char buffer [BUFFER_SIZE];
 	struct cl_node *root = NULL;
 	int ret;
 	int r_len = 0;
 	int envelope_len = 0;
-	unsigned long message_len = 0;
-	char buffer [BUFFER_SIZE];
 	char *virus_name;
-	char *message = NULL;
+	char *tmp_path;
 	char *envelope = NULL;
 	int message_pipe [2];
 	int envelope_pipe [2];
 	int child_status;
+	int tmp_fd;
 	unsigned long scanned;
 	struct cl_limits limit;
 	limit.maxfiles = 1000;
 	limit.maxfilesize = 10 * 1048576;
 	limit.maxreclevel = 5;
-	char *tmpfile = strdup ("/tmp/gadoyanvirus-XXXXXX");
-	int tmpfd;
-	
 	pid_t pid;
-
-	char *temp; 
-
-	if (tmpfile == NULL)
-		die_status (51, "no memory for temp file");
 
 	if ((ret = cl_loaddbdir (cl_retdbdir (), &root, NULL)) != 0)
 		die_temp_cl (ret);
@@ -322,34 +366,9 @@ int main ()
 	}
 
 	ret = 0;
-	while ((r_len = read (0, buffer, BUFFER_SIZE)) != 0) {		
-		if (r_len < 0)
-			die_status (54, "couldn't read message");
+	tmp_path = save_temp ();
 
-		message_len += r_len;
-		message = realloc (message, message_len);
-		if (message == NULL)
-			die_status (51, "no memory for message");
-
-		memcpy (message + message_len - r_len, buffer, r_len);
-	}
-
-	tmpfd = mkstemp (tmpfile);
-	if (tmpfd == -1)
-		die_status (81, "couldn't open temp file for writing");
-
-	if (write (tmpfd, message, message_len) < 0)
-		die_status (81, "couldn't write temp file");
-
-	close (tmpfd);
-
-	ret = cl_scanfile (tmpfile, &temp, &scanned, root, &limit, CL_MAIL);
-	unlink (tmpfile);
-	if (ret == CL_VIRUS) {
-		virus_name = strdup (temp);
-	}
-
-	cl_freetrie (root);
+	ret = cl_scanfile (tmp_path, &virus_name, &scanned, root, &limit, CL_MAIL);
 
 	while ((r_len = read (1, buffer, BUFFER_SIZE)) != 0) {
 		if (r_len < 0)
@@ -363,26 +382,40 @@ int main ()
 		memcpy (envelope + envelope_len - r_len, buffer, r_len);
 	}
 
-
 #define SIGNATURE "X-AntiVirus: gadoyanvirus " VERSION "\n"
+	tmp_fd = open (tmp_path, O_RDONLY);
+	if (tmp_fd < 0)
+		die_status (81, "couldn't read temp message");
 
 	if (ret != CL_VIRUS) {
-		if (write (message_pipe [1], SIGNATURE, sizeof (SIGNATURE)) < 0)
+		if (write (message_pipe [1], SIGNATURE, strlen (SIGNATURE)) < 0)
 			die_status (53, "couldn't write message");		
-		if (write (message_pipe [1], message, message_len) < 0)
-			die_status (53, "couldn't write message");		
+
+		while ((r_len = read (tmp_fd, buffer, BUFFER_SIZE)) != 0) {		
+			if (r_len < 0)
+				die_status (54, "couldn't read message");
+
+			if (write (message_pipe [1], buffer, r_len) < 0) {
+				die_status (81, "couldn't write temp message");
+			}
+		}
+		close (tmp_fd);
 		if (write (envelope_pipe [1], envelope, envelope_len) < 0)
 			die_status (53, "couldn't write envelope");
 	} else {
 		send_notification (	virus_name, 
+							tmp_path,
 							message_pipe [1], 
-							message, message_len,
+							tmp_fd,
 							envelope_pipe [1], 
 							envelope, envelope_len);
-		free (virus_name);
+		close (tmp_fd);
+		save_maildir (tmp_path);
 	}
 
-	free (message);
+	cl_freetrie (root);
+	unlink (tmp_path);
+	free (tmp_path);
 	free (envelope);
 	close (message_pipe [1]);
 	close (envelope_pipe [1]);
@@ -396,7 +429,7 @@ int main ()
 	if (ret == CL_VIRUS)
 		die_status (31, "virus catched");
 
-	if (ret != 0)
+	if (ret != CL_CLEAN)
 		die_temp_cl (ret);
 
 	return 0;
