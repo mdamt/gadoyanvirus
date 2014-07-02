@@ -1,3 +1,10 @@
+2004-01-28	Mohammad DAMT  <mdamt@bisnisweb.com>
+
+	* version 0.15
+	* changed scan API call to ClamAV from cl_scanbuff to cl_scanfile in order
+	  to catch virus in mail message properly
+	* added "X-AntiVirus" signature in clean mail messages
+
 2004-01-26	Mohammad DAMT  <mdamt@bisnisweb.com>
 	
 	* version 0.1

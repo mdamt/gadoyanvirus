@@ -41,7 +41,7 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 #define VIRUSMASTER "postmaster@"
 /* end of settings */
 
-#define VERSION "0.1"
+#define VERSION "0.1.5"
 #define BUFFER_SIZE 1024
 
 void write_log (char *message)
@@ -269,9 +269,20 @@ int main ()
 	int message_pipe [2];
 	int envelope_pipe [2];
 	int child_status;
+	unsigned long scanned;
+	struct cl_limits limit;
+	limit.maxfiles = 1000;
+	limit.maxfilesize = 10 * 1048576;
+	limit.maxreclevel = 5;
+	char *tmpfile = strdup ("/tmp/gadoyanvirus-XXXXXX");
+	int tmpfd;
+	
 	pid_t pid;
 
 	char *temp; 
+
+	if (tmpfile == NULL)
+		die_status (51, "no memory for temp file");
 
 	if ((ret = cl_loaddbdir (cl_retdbdir (), &root, NULL)) != 0)
 		die_temp_cl (ret);
@@ -323,7 +334,17 @@ int main ()
 		memcpy (message + message_len - r_len, buffer, r_len);
 	}
 
-	ret = cl_scanbuff (message, message_len, &temp, root);
+	tmpfd = mkstemp (tmpfile);
+	if (tmpfd == -1)
+		die_status (81, "couldn't open temp file for writing");
+
+	if (write (tmpfd, message, message_len) < 0)
+		die_status (81, "couldn't write temp file");
+
+	close (tmpfd);
+
+	ret = cl_scanfile (tmpfile, &temp, &scanned, root, &limit, CL_MAIL);
+	unlink (tmpfile);
 	if (ret == CL_VIRUS) {
 		virus_name = strdup (temp);
 	}
@@ -342,7 +363,12 @@ int main ()
 		memcpy (envelope + envelope_len - r_len, buffer, r_len);
 	}
 
+
+#define SIGNATURE "X-AntiVirus: gadoyanvirus " VERSION "\n"
+
 	if (ret != CL_VIRUS) {
+		if (write (message_pipe [1], SIGNATURE, sizeof (SIGNATURE)) < 0)
+			die_status (53, "couldn't write message");		
 		if (write (message_pipe [1], message, message_len) < 0)
 			die_status (53, "couldn't write message");		
 		if (write (envelope_pipe [1], envelope, envelope_len) < 0)
